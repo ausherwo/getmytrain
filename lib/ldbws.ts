@@ -48,6 +48,16 @@ export type Departure = {
    *  train) from "stops" (intermediate stations), so a direct train can
    *  still have many stops. */
   stopCount: number;
+  /** Free-text reason a service is cancelled, when LDBWS supplies it.
+   *  e.g. "Late arrival of incoming train", "Operational incident". */
+  cancelReason?: string;
+  /** Free-text reason a service is running late, when LDBWS supplies
+   *  it. Same shape as cancelReason but for delayed services. */
+  delayReason?: string;
+  /** Per-service ad-hoc alerts from the TOC. Short human-readable
+   *  strings like "Reduced seating today" or "Will not call at
+   *  Wimbledon today". Empty array when there are none. */
+  adhocAlerts: string[];
   onTimePercent30d: number;
   recent14Days: never[];
 };
@@ -156,6 +166,24 @@ function reshapeService(
 
   const platform = pickString(s, "platform");
 
+  // Reason fields — LDBWS supplies these as free-text sentences from the
+  // TOC's CIS. We pass them through verbatim; they're typically short
+  // (~6-12 words, e.g. "Late arrival of incoming train"). Only included
+  // in the returned shape when actually present — undefined otherwise so
+  // the UI can conditionally render rather than checking for empty strings.
+  const cancelReason = pickString(s, "cancelReason")?.trim() || undefined;
+  const delayReason = pickString(s, "delayReason")?.trim() || undefined;
+
+  // Per-service ad-hoc alerts: short strings published by the TOC for
+  // service-specific gotchas ("Will not call at Wimbledon today",
+  // "Reduced seating"). LDBWS returns this as an array of strings —
+  // we filter out blanks but otherwise pass through unchanged.
+  const adhocAlertsRaw = getArray(s, "adhocAlerts");
+  const adhocAlerts = adhocAlertsRaw
+    .filter((a): a is string => typeof a === "string")
+    .map((a) => a.trim())
+    .filter((a) => a.length > 0);
+
   // Find the destination calling point in subsequentCallingPoints.
   // The field is an array of arrays — one inner array per portion of
   // the train (e.g. a train that splits at a junction has two). We
@@ -218,6 +246,9 @@ function reshapeService(
     serviceId: serviceID,
     durationMinutes,
     stopCount,
+    cancelReason,
+    delayReason,
+    adhocAlerts,
     onTimePercent30d: 0,
     recent14Days: [],
   };
