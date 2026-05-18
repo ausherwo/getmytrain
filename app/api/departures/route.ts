@@ -10,6 +10,14 @@
 // project's environment variables for production. The key never
 // appears in code.
 //
+// CORS: this endpoint is hosted at api.getmytrain.co.uk and called
+// from the PWA at app.getmytrain.co.uk — different origins, so the
+// browser requires CORS headers on the response. The endpoint serves
+// read-only public train data with no auth, so a permissive
+// Access-Control-Allow-Origin: * is fine. An OPTIONS preflight
+// handler is also exported for completeness (most browsers won't
+// send a preflight for a simple GET, but a few will).
+//
 // Caching: explicitly disabled (`cache: 'no-store'`) because
 // departures change every minute — caching would surface stale
 // information. We'll layer a short Vercel edge cache (~30s) later
@@ -28,6 +36,23 @@
 // half of the combined endpoint is effectively a no-op for us.
 
 import { NextRequest, NextResponse } from "next/server";
+
+/** Headers attached to every response so the PWA (different origin)
+ *  can read the body. Read-only public data, no auth — permissive
+ *  origin is fine. */
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Accept, Content-Type",
+  "Access-Control-Max-Age": "86400",
+} as const;
+
+/** Preflight handler. A simple GET with only an Accept header doesn't
+ *  trigger preflight, but Safari has been known to send OPTIONS in
+ *  edge cases (e.g. service-worker-intercepted fetches). Cheap insurance. */
+export function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
 
 const LDBWS_BASE =
   "https://api1.raildata.org.uk/1010-live-arrival-and-departure-boards-arr-and-dep1_1";
@@ -127,7 +152,7 @@ export async function GET(req: NextRequest) {
     .map((s) => reshapeService(s, from, to))
     .filter((d): d is Departure => d !== null);
 
-  return NextResponse.json({ ok: true, departures });
+  return jsonOk({ ok: true, departures });
 }
 
 /* --------------------------- reshape one service -------------------------- */
@@ -216,8 +241,17 @@ function reshapeService(
 
 /* --------------------------------- helpers -------------------------------- */
 
+/** Success response wrapper — adds CORS headers so the cross-origin
+ *  PWA can read the body. */
+function jsonOk(body: unknown) {
+  return NextResponse.json(body, { headers: CORS_HEADERS });
+}
+
 function jsonError(status: number, error: string) {
-  return NextResponse.json({ ok: false, error }, { status });
+  return NextResponse.json(
+    { ok: false, error },
+    { status, headers: CORS_HEADERS },
+  );
 }
 
 function clamp(n: number, lo: number, hi: number): number {
