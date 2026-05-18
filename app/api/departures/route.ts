@@ -64,7 +64,14 @@ const LDBWS_BASE =
  */
 type Departure = {
   scheduled: string; // HH:MM, 24-hour
-  expected: string; // HH:MM, 24-hour
+  expected: string; // HH:MM, 24-hour — at the ORIGIN station
+  /** Expected arrival time at the DESTINATION, HH:MM 24-hour. Sourced
+   *  from the destination calling point's `et` (estimated) with `st`
+   *  (scheduled) as fallback. Reflects mid-journey delay accumulation
+   *  so the rider sees "actually arrives 09:46" rather than the app
+   *  computing departExpected + scheduledDuration (which silently
+   *  ignores delays incurred between origin and destination). */
+  expectedArrival: string;
   status: "on_time" | "delayed" | "cancelled";
   delayMinutes: number;
   platform?: string;
@@ -73,7 +80,15 @@ type Departure = {
   originCrs: string;
   destinationCrs: string;
   serviceId: string;
+  /** Scheduled journey duration in minutes — origin std → destination st.
+   *  This is the timetable promise, not the live expectation. The live
+   *  arrival is in expectedArrival. */
   durationMinutes: number;
+  /** Intermediate stops between origin and destination, exclusive of
+   *  both. A direct service that calls nowhere else returns 0; a 13-
+   *  calling-point service ending at the destination returns 12. UK rail
+   *  parlance distinguishes "direct" (no change of train) from "stops",
+   *  so a direct train can still have many stops. */
   stopCount: number;
   /** Historic Service Performance (HSP) — a separate RDM product
    *  we haven't wired yet. Left 0 so the app's reliability block
@@ -202,28 +217,69 @@ function reshapeService(
   // The field is an array of arrays — one inner array per portion of
   // the train (e.g. a train that splits at a junction has two). We
   // take the first portion that contains toCrs.
+  //
+  // From the destination point we derive three things:
+  //   - durationMinutes:   scheduled origin → scheduled dest (timetable)
+  //   - expectedArrival:   live destination ETA, falls back to scheduled
+  //                        if the destination point hasn't been issued
+  //                        an estimate yet (common on early-in-journey
+  //                        services). Critical: takes destination `et`
+  //                        directly rather than computing origin
+  //                        expected + duration, because delays absorbed
+  //                        or accumulated mid-journey only show up in
+  //                        the destination's `et`.
+  //   - stopCount:         idx of destination in callingPoint = number
+  //                        of intermediate stops between origin and
+  //                        destination, exclusive of both. (idx 0 means
+  //                        destination is the next stop = no
+  //                        intermediate stations.)
   let durationMinutes = 0;
+  let expectedArrival = expected; // sentinel: same as origin's expected
   let stopCount = 0;
+
   const groups = getArray(s, "subsequentCallingPoints");
   for (const group of groups) {
     const points = getArray(group, "callingPoint");
     const idx = points.findIndex(
       (p) => isObject(p) && p.crs === toCrs,
     );
-    if (idx >= 0) {
-      const dest = points[idx] as Record<string, unknown>;
-      const destTime = pickString(dest, "st") ?? pickString(dest, "et");
-      if (destTime && /^\d{2}:\d{2}$/.test(destTime)) {
-        durationMinutes = diffMinutes(std, destTime);
-      }
-      stopCount = idx; // intermediate stops between origin and destination
-      break;
+    if (idx < 0) continue;
+
+    const dest = points[idx] as Record<string, unknown>;
+    const destSt = pickString(dest, "st");
+    const destEt = pickString(dest, "et");
+
+    // Scheduled duration uses `st` only — never `et`, since duration
+    // is by definition the timetable distance from std→st.
+    if (destSt && /^\d{2}:\d{2}$/.test(destSt)) {
+      durationMinutes = diffMinutes(std, destSt);
     }
+
+    // Expected arrival: prefer `et` if it's a real time. "On time" /
+    // "No report" / "Delayed" et values mean the upstream hasn't
+    // issued an estimate yet at the destination, so we fall back to
+    // the scheduled arrival.
+    if (destEt && /^\d{2}:\d{2}$/.test(destEt)) {
+      expectedArrival = destEt;
+    } else if (destSt && /^\d{2}:\d{2}$/.test(destSt)) {
+      expectedArrival = destSt;
+    }
+
+    // For cancelled services there is no real arrival — keep the
+    // scheduled time so the UI has something to show alongside the
+    // cancelled badge, rather than a falsified ETA.
+    if (isCancelled && destSt && /^\d{2}:\d{2}$/.test(destSt)) {
+      expectedArrival = destSt;
+    }
+
+    stopCount = idx;
+    break;
   }
 
   return {
     scheduled: std,
     expected,
+    expectedArrival,
     status,
     delayMinutes,
     platform: platform || undefined,
