@@ -102,8 +102,16 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const from = url.searchParams.get("from")?.toUpperCase().trim();
   const to = url.searchParams.get("to")?.toUpperCase().trim();
+  // numRows controls the size of the station-board fetch BEFORE the
+  // filterCrs/filterType narrows results to services going to `to`.
+  // For low-frequency stations like Dorking (hourly direct to WAT,
+  // but multiple southbound services per hour mixed in on the same
+  // board), asking for 8 rows might leave only 2-3 Waterloo-bound
+  // departures after filtering. 20 (LDBWS's hard limit) gives the
+  // app's 8-slot list enough headroom on low-frequency routes while
+  // costing nothing on busy ones.
   const max = clamp(
-    Number(url.searchParams.get("max")) || 8,
+    Number(url.searchParams.get("max")) || 20,
     1,
     20,
   );
