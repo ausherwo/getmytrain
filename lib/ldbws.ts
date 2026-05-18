@@ -74,6 +74,22 @@ export class LdbwsError extends Error {
   }
 }
 
+/** What one LDBWS window-call returns to the route handlers.
+ *
+ *  - departures:      reshaped per-service shape, what the rider sees
+ *                     as rows.
+ *  - stationMessages: station-board level NRCC ("National Rail
+ *                     Communication Centre") messages. Apply to ALL
+ *                     services from this origin — engineering works,
+ *                     industrial action, station-wide warnings.
+ *                     The rider sees these as a single banner above
+ *                     the trains list, not per-row.
+ */
+export type LdbwsWindow = {
+  departures: Departure[];
+  stationMessages: string[];
+};
+
 /**
  * Fetch one LDBWS window (up to 120 minutes from now+timeOffset) and
  * reshape it into Departure[].
@@ -93,7 +109,7 @@ export async function fetchWindow(
   apiKey: string,
   numRows: number,
   timeOffsetMinutes = 0,
-): Promise<Departure[]> {
+): Promise<LdbwsWindow> {
   // GetArrDepBoardWithDetails — combined arrivals + departures with
   // calling-point details. We use this rather than the departures-only
   // variant because our RDM subscription only exposes the combined
@@ -118,9 +134,24 @@ export async function fetchWindow(
   const upstream = (await res.json()) as unknown;
 
   const trainServices = getArray(upstream, "trainServices");
-  return trainServices
+  const departures = trainServices
     .map((s) => reshapeService(s, from, to))
     .filter((d): d is Departure => d !== null);
+
+  // nrccMessages — station-board level free-text warnings. Each entry
+  // is { Value: string }; we flatten, strip the HTML wrappers LDBWS
+  // tends to include (typically <p>…</p>), trim, drop blanks. These
+  // apply to every service from this origin, so we bubble them up to
+  // the route handler as plain strings.
+  const nrccRaw = getArray(upstream, "nrccMessages");
+  const stationMessages = nrccRaw
+    .map((m) => pickString(m, "Value"))
+    .filter((s): s is string => typeof s === "string")
+    .map(stripHtmlTags)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  return { departures, stationMessages };
 }
 
 /* --------------------------- reshape one service -------------------------- */
@@ -278,6 +309,23 @@ function getArray(o: unknown, key?: string): unknown[] {
 function hhmmToMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
+}
+
+/** Strip simple HTML tags from a string — LDBWS nrccMessages typically
+ *  arrive wrapped in <p>…</p>, sometimes with <a href="…"> links
+ *  embedded. We don't need to render those in the UI; collapse to plain
+ *  text. Decodes the handful of HTML entities we see in practice
+ *  (&amp;, &lt;, &gt;, &quot;, &#39;) — not a full HTML parser, just
+ *  what's pragmatic for the actual content. */
+function stripHtmlTags(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ");
 }
 
 function diffMinutes(fromHHMM: string, toHHMM: string): number {

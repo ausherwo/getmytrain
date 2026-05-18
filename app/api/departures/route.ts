@@ -48,8 +48,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const departures = await fetchWindow(from, to, apiKey, max);
-    return jsonOk({ ok: true, departures });
+    const { departures, stationMessages } = await fetchWindow(
+      from,
+      to,
+      apiKey,
+      max,
+    );
+    return jsonOk({ ok: true, departures, stationMessages });
   } catch (err) {
     if (err instanceof LdbwsError) {
       console.error("[/api/departures] LDBWS HTTP", err.httpStatus, err.message);

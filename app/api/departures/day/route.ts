@@ -99,14 +99,22 @@ export async function GET(req: NextRequest) {
   // responses. First-occurrence wins: that's the earliest-offset
   // window, which carries the freshest live data for services near
   // "now". (Services 6h out hardly differ across nearby offsets.)
+  //
+  // Station-wide nrccMessages are deduped by exact string — they're
+  // identical across windows for the same origin / time of day, so
+  // a Set keeps the union without repeats.
   const seen = new Set<string>();
   const merged: Departure[] = [];
+  const messagesSet = new Set<string>();
   for (const r of results) {
     if (r.status !== "fulfilled") continue;
-    for (const dep of r.value) {
+    for (const dep of r.value.departures) {
       if (seen.has(dep.serviceId)) continue;
       seen.add(dep.serviceId);
       merged.push(dep);
+    }
+    for (const msg of r.value.stationMessages) {
+      messagesSet.add(msg);
     }
   }
 
@@ -121,7 +129,11 @@ export async function GET(req: NextRequest) {
       scheduledOffsetMs(b.scheduled, now),
   );
 
-  return jsonOk({ ok: true, departures: merged });
+  return jsonOk({
+    ok: true,
+    departures: merged,
+    stationMessages: [...messagesSet],
+  });
 }
 
 /**
