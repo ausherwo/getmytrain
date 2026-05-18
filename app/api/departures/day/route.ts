@@ -22,11 +22,21 @@ import { NextRequest } from "next/server";
 import { corsPreflight, jsonError, jsonOk } from "@/lib/http";
 import { fetchWindow, LdbwsError, type Departure } from "@/lib/ldbws";
 
-/** 6 windows of 2 hours each = 12-hour look-ahead. Covers the typical
- *  commuter's "rest of today" scan from any starting time. Beyond 12h
- *  the value flattens (fewer riders care about tomorrow's 04:00 service
- *  while planning) and the LDBWS call cost climbs linearly. */
-const DAY_OFFSETS_MIN = [0, 120, 240, 360, 480, 600] as const;
+/** Two windows of 2 hours each = 4-hour total look-ahead.
+ *
+ *  Hard ceiling: LDBWS's `timeOffset` parameter is bounded to ±120
+ *  minutes. Offsets above that get rejected or clamped, which is why
+ *  the original [0, 120, 240, 360, 480, 600] design returned the same
+ *  2 services regardless of how far out we tried to look. With
+ *  timeOffset=120 + timeWindow=120 the latest window covers up to
+ *  now+240 min, so 4 hours is the maximum forward reach this endpoint
+ *  can deliver.
+ *
+ *  For a real full-day schedule (late evening, next-day-AM) we'd need
+ *  to integrate a timetable feed — RDM's Timetable Information Service
+ *  or Network Rail's SCHEDULE feed. Tracked as a separate enhancement;
+ *  LDBWS by design publishes live data, not the full timetable. */
+const DAY_OFFSETS_MIN = [0, 120] as const;
 
 /** Max services per window. LDBWS allows 50; we ask for the max so a
  *  high-frequency route at peak (e.g. Surbiton → Waterloo) still gets
